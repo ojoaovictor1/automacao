@@ -1,5 +1,9 @@
 from tkinter import ttk, filedialog, messagebox
+from pathlib import Path
+import re
 import customtkinter as ctk
+import os
+import pdfplumber
 
 class AppLancamento(ctk.CTk):
     def __init__(self):
@@ -9,27 +13,102 @@ class AppLancamento(ctk.CTk):
         self.configure(fg_color="#F4F6F9")
         self.resizable(False, False)
 
-        self.caminho_arquivo = ""
-        self.lancamento = []
+        self.caminho_pdf = ""
+        self.lancamentos = []
         self.em_execucao = False
         self.parar_execucao = False
 
         self._construir_interface()
 
     def selecionar_arquivo(self):
-        caminho = filedialog.askopenfilename(
-            title="Selecionar arquivo",
-            filetypes=(("Arquivos PDF", "*.pdf"), ("Todos os arquivos", "*.*"))
-        )
+        caminho = filedialog.askopenfilename(filetypes=[("Arquivos PDF", "*.pdf")])
         if caminho:
+            self.caminho_pdf = caminho
             self.input_resultado.delete(0, "end")
-            self.input_resultado.insert(0, caminho)
+            self.input_resultado.insert(0, Path(caminho).name)
+            self.verificar_arquivo()
 
     def verificar_arquivo(self):
-        if self.input_resultado.get():
-            self.label_resultado.configure(text="Arquivo verificado")
-        else:
-            self.label_resultado.configure(text="Selecione um arquivo primeiro")
+        caminho = self.caminho_pdf or self.input_resultado.get()
+
+        if not caminho or not os.path.exists(caminho):
+            if os.path.exists(Path(caminho).name):
+                caminho = str(Path(caminho).name)
+            else:
+                messagebox.showerror("Erro", "Arquivo PDF não encontrado")
+                return
+
+        self.caminho_pdf = caminho
+        nome_arq = Path(caminho).name
+        self.lbl_info_arq.configure(text=f"Arquivo:  {nome_arq}")
+
+        self.lancamentos = []
+        total_valor = 0.0
+
+        try:
+            with pdfplumber.open(caminho) as pdf:
+                for pagina in pdf.pages:
+                    texto = pagina.extract_text()
+                    if not texto:
+                        continue
+
+                    for linha in texto.split('\n'):
+                        linha = linha.strip()
+                        match_data = re.search(r'(\d{2}[/\.-]\d{2}[/\.-]\d{4}|\d{4}[/\.-]\d{2}[/\.-]\d{2})', linha)
+                        match_valor = re.search(r'([\d\.\,]+)$', linha)
+
+                        if match_data and match_valor:
+                            inicio_miolo = match_data.end()
+                            fim_miolo = match_valor.start()
+                            miolo = linha[inicio_miolo:fim_miolo].strip().split()
+
+                            if len(miolo) >= 2 and miolo[0].startswith("EX-"):
+                                codigo = miolo[0]
+                                categoria = miolo[-1].lower()
+                                descricao = " ".join(miolo[1:-1]) if len(miolo) > 2 else miolo[0]
+                                valor_str = match_valor.group(1).replace(".", "").replace(",", ".")
+                                valor_num = float(valor_str)
+
+                                total_valor += valor_num
+
+                                self.lancamentos.append({
+                                    "data": match_data.group(1),
+                                    "codigo": codigo,
+                                    "descricao": descricao,
+                                    "categoria": categoria,
+                                    "valor_str": match_valor.group(1),
+                                    "valor_num": valor_str
+                                })
+
+            qtd = len(self.lancamentos)
+            self.lbl_info_qtd.configure(text=f"Quantidade de linhas:  {qtd} lançamentos")
+
+            valor_fmt = f"{total_valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            self.lbl_info_total.configure(text=f"Total do lote:  R${valor_fmt} (confere com o PDF)")
+
+            self.btn_badge.configure(
+                text="Pronto",
+                fg_color='#D4EDDA',
+                text_color="#155724"
+            )
+
+            for item in self.tree.get_children():
+                self.tree.delete(item)
+
+            for idx, item in enumerate(self.lancamentos, start=1):
+                idx_str = f"{idx:02d}"
+                self.tree.insert("", "end", iid=str(idx), values=(
+                    idx_str, item["data"], item["codigo"], item["descricao"], 
+                    item["categoria"], item["valor_str"], "Aguardando"
+                ))
+
+            self.lbl_progresso.configure(text=f"Progresso: 0 / {qtd}")
+            self.progress_bar.set(0)
+        
+        except Exception as e:
+            self.btn_badge.configure(text="Erro no arquivo", fg_color="#F8D7DA", text_color="#721C24")
+            messagebox.showerror("Erro de Leitura", f"Falha ao ler PDF: {str(e)}")
+        ###
     
     def _construir_interface(self):
 
@@ -91,9 +170,6 @@ class AppLancamento(ctk.CTk):
             font=ctk.CTkFont(size=12, weight="bold")
         )
         self.btn_badge.pack(anchor="e")
-
-        lbl_sub_status = ctk.CTkLabel(frame_card_status, text="(se falhar: aparece \"Erro\" e a lista de problemas)", font=ctk.CTkFont(size=10), text_color="#6C757D")
-        lbl_sub_status.pack(anchor="e", pady=(3, 0))
 
         # Controles
         frame_controles = ctk.CTkFrame(self.main_frame, fg_color="transparent")

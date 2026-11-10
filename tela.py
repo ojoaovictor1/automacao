@@ -6,6 +6,7 @@ class AppLancamento(ctk.CTk):
         super().__init__()
         self.title("Automação para Lançamentos SIGMA")
         self.geometry("960x750")
+        self.configure(fg_color="#F4F6F9")
         self.resizable(False, False)
 
         self.caminho_arquivo = ""
@@ -32,7 +33,7 @@ class AppLancamento(ctk.CTk):
     
     def _construir_interface(self):
 
-        self.main_frame = ctk.CTkFrame(self, fg_color="#F8F9FA", corner_radius=10)
+        self.main_frame = ctk.CTkFrame(self, fg_color="transparent", corner_radius=10)
         self.main_frame.pack(fill="both", expand=True, padx=20, pady=20)
 
         self.titulo = ctk.CTkLabel(self.main_frame, text="Automação para Lançamentos SIGMA", font=("Arial", 24, "bold"), text_color="#000000")
@@ -42,7 +43,7 @@ class AppLancamento(ctk.CTk):
         self.descricao.pack(anchor="w", padx=20)
 
         # div arquivo
-        self.frame_arquivo = ctk.CTkFrame(self.main_frame, fg_color="#E9ECEF", corner_radius=10)
+        self.frame_arquivo = ctk.CTkFrame(self.main_frame, fg_color="transparent", corner_radius=10)
         self.frame_arquivo.pack(fill="x", padx=20, pady=(20, 10))
 
         self.label_arquivo = ctk.CTkLabel(self.frame_arquivo, text="Selecione o arquivo:", font=ctk.CTkFont(size=14, weight="bold"), text_color="#495057")
@@ -64,16 +65,16 @@ class AppLancamento(ctk.CTk):
         self.frame_relatorio = ctk.CTkFrame(self.main_frame, fg_color="#FFFFFF", border_color="#DEE2E6", border_width=1, corner_radius=8)
         self.frame_relatorio.pack(fill="x", pady=(0, 15), padx=20)
 
-        frame_card_info = ctk.CTkFrame(self.frame_relatorio , fg_color="red", border_color="#DEE2E6", border_width=1, corner_radius=8)
+        frame_card_info = ctk.CTkFrame(self.frame_relatorio , fg_color="transparent", border_color="#DEE2E6", border_width=1, corner_radius=8)
         frame_card_info.pack(side="left", padx=15, anchor="w")
 
-        self.lbl_info_arq = ctk.CTkLabel(frame_card_info, text="Arquivo:   Nenhum arquivo selecionado", font=ctk.CTkFont(size=13), text_color="#ffffff")
+        self.lbl_info_arq = ctk.CTkLabel(frame_card_info, text="Arquivo:   Nenhum arquivo selecionado", font=ctk.CTkFont(size=13), text_color="#333333")
         self.lbl_info_arq.pack(anchor="w", pady=2)
 
-        self.lbl_info_qtd = ctk.CTkLabel(frame_card_info, text="Quantidade de linhas:   --", font=ctk.CTkFont(size=13), text_color="#ffffff")
+        self.lbl_info_qtd = ctk.CTkLabel(frame_card_info, text="Quantidade de linhas:   --", font=ctk.CTkFont(size=13), text_color="#333333")
         self.lbl_info_qtd.pack(anchor="w", pady=2)
 
-        self.lbl_info_total = ctk.CTkLabel(frame_card_info, text="Total do lote:   --", font=ctk.CTkFont(size=13), text_color="#ffffff")
+        self.lbl_info_total = ctk.CTkLabel(frame_card_info, text="Total do lote:   --", font=ctk.CTkFont(size=13), text_color="#333333")
         self.lbl_info_total.pack(anchor="w", pady=2)
 
         frame_card_status = ctk.CTkFrame(self.frame_relatorio, fg_color="transparent")
@@ -135,7 +136,33 @@ class AppLancamento(ctk.CTk):
         style.configure("Treeview", font=("Arial", 9), rowheight=28, background="#FFFFFF", fieldbackground="#FFFFFF")
         style.map("Treeview", background=[("selected", "#E2E6EA")], foreground=[("selected", "#000000")])
 
+        frame_tabela = ctk.CTkFrame(self.main_frame, fg_color="#FFFFFF", border_color="#DEE2E6", border_width=1, corner_radius=8)
+        frame_tabela.pack(fill="both", expand=True, padx=15, pady=(0, 15))
 
+        colunas = ("id", "data", "codigo", "descricao", "categoria", "valor", "status")
+        self.tree = ttk.Treeview(frame_tabela, columns=colunas, show="headings", height=10)
+
+        self.tree.heading("id", text="#")
+        self.tree.heading("data", text="Data")
+        self.tree.heading("codigo", text="Código")
+        self.tree.heading("descricao", text="Descrição")
+        self.tree.heading("categoria", text="Categoria")
+        self.tree.heading("valor", text="R$")
+        self.tree.heading("status", text="Status")
+
+        self.tree.column("id", width=40, anchor="center")
+        self.tree.column("data", width=90, anchor="center")
+        self.tree.column("codigo", width=90, anchor="center")
+        self.tree.column("descricao", width=200, anchor="w")
+        self.tree.column("categoria", width=110, anchor="w")
+        self.tree.column("valor", width=100, anchor="e")
+        self.tree.column("status", width=110, anchor="center")
+
+        scrollbar = ttk.Scrollbar(frame_tabela, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scrollbar.set)
+
+        self.tree.pack(side="left", fill="both", expand=True, padx=5, pady=5)
+        scrollbar.pack(side="right", fill="y", pady=5)
 
 if __name__ == "__main__":
     app = AppLancamento()

@@ -1,7 +1,10 @@
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
+from playwright.sync_api import sync_playwright
 import re
 import customtkinter as ctk
+import threading
+import time
 import os
 import pdfplumber
 
@@ -108,10 +111,86 @@ class AppLancamento(ctk.CTk):
         except Exception as e:
             self.btn_badge.configure(text="Erro no arquivo", fg_color="#F8D7DA", text_color="#721C24")
             messagebox.showerror("Erro de Leitura", f"Falha ao ler PDF: {str(e)}")
-        ###
+
+    @staticmethod
+    def formatar_para_iso(data_str):
+        data_limpa = data_str.replace('.', '/').replace('-', '/').strip()
+        partes = data_limpa.split('/')
+        if len(partes) == 3:
+            if len(partes[0]) == 4:
+                return f"{partes[0]}-{partes[1]}-{partes[2]}"
+            elif len(partes[2]) == 4:
+                return f"{partes[2]}-{partes[1]}-{partes[0]}"
+        return data_str
+
+    def executar_playwright(self):
+        total = len(self.lancamentos)
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=False, slow_mo=200)
+            page = browser.new_page()
+
+            caminho_html = Path("index.html").resolve().as_uri()
+            page.goto(caminho_html)
+
+            for idx, item in enumerate(self.lancamentos, start=1):
+                if self.parar_solicitado:
+                    break
+
+                self.after(0, self._atualizar_linha_tabela, str(idx), "Lançando ...")
+
+                try:
+                    data_iso = self.formatar_para_iso(item["data"])
+
+                    page.fill("#data", data_iso)
+                    page.fill("#codigo", item["codigo"])
+                    page.fill("#descricao", item["descricao"])
+
+                    try:
+                        page.select_option("#categoria", value=item["categoria"])
+                    except Exception:
+                        page.select_option("#categoria", index=1)
+
+                    page.fill("#valor", item["valor_num"])
+                    page.click("#btn-salvar")
+
+                    time.sleep(0.1)
+
+                    self.after(0, self._atualizar_linha_tabela, str(idx), "OK")
+                
+                except Exception as e:
+                    print(f"Erro ao lançar item {idx} ({item['codigo']}): {e}")
+                    self.after(0, self._atualizar_linha_tabela, str(idx), "ERRO")
+                
+                progresso_perc = idx / total
+                self.after(0, self._atualizar_progresso, idx, total, progresso_perc)
+
+            browser.close()
+
+    def _iniciar_lancamentos_thread(self):
+        if not self.lancamentos:
+            messagebox.showwarning("Aviso", "Selecione e verifique um PDF válido primeiro.")
+            return
+
+        if self.em_execucao:
+            return
+
+        self.em_execucao = True
+        self.parar_solicitado = False
+        self.btn_processar.configure(state="disabled")
+
+        threading.Thread(target=self.executar_playwright, daemon=True).start()
+
+    def _atualizar_linha_tabela(self, item_id, novo_status):
+        valores = list(self.tree.item(item_id, "values"))
+        valores[6] = novo_status
+        self.tree.item(item_id, values=valores)
+
+    def _atualizar_progresso(self, atual, total, percentual):
+        self.lbl_progresso.configure(text=f"Progresso: {atual} / {total}")
+        self.progress_bar.set(percentual)
     
     def _construir_interface(self):
-
         self.main_frame = ctk.CTkFrame(self, fg_color="transparent", corner_radius=10)
         self.main_frame.pack(fill="both", expand=True, padx=20, pady=20)
 
@@ -175,7 +254,7 @@ class AppLancamento(ctk.CTk):
         frame_controles = ctk.CTkFrame(self.main_frame, fg_color="transparent")
         frame_controles.pack(fill="x", pady=(0, 15))
 
-        self.btn_processar = ctk.CTkButton(frame_controles, text="Iniciar Lançamentos", fg_color="#28A745", text_color="#FFFFFF", hover_color="#0056B3", font=ctk.CTkFont(size=14, weight="bold"), height=40, width=180)
+        self.btn_processar = ctk.CTkButton(frame_controles, text="Iniciar Lançamentos", fg_color="#28A745", text_color="#FFFFFF", hover_color="#0056B3", font=ctk.CTkFont(size=14, weight="bold"), height=40, width=180, command=self._iniciar_lancamentos_thread)
         self.btn_processar.pack(side="left", padx=(15, 15), pady=10)
 
         frame_progresso = ctk.CTkFrame(frame_controles, fg_color="transparent")
@@ -190,7 +269,7 @@ class AppLancamento(ctk.CTk):
 
         self.btn_parar = ctk.CTkButton(
             frame_controles,
-            text="■  Parar",
+            text="Parar",
             fg_color="#FFFFFF",
             text_color="#DC3545",
             border_color="#DC3545",
@@ -203,7 +282,7 @@ class AppLancamento(ctk.CTk):
         self.btn_parar.pack(side="right", padx=(0, 15), pady=10)
 
         # Tabela
-        tabela_titulo = ctk.CTkLabel(self.main_frame, text="Lançamentos realizados", font=ctk.CTkFont(size=14, weight="bold"), text_color="#333333")
+        tabela_titulo = ctk.CTkLabel(self.main_frame, text="Status dos Lançamentos", font=ctk.CTkFont(size=14, weight="bold"), text_color="#333333")
         tabela_titulo.pack(anchor="w", pady=(0, 5), padx=15)
 
         style = ttk.Style()

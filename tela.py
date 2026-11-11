@@ -29,7 +29,6 @@ class AppLancamento(ctk.CTk):
             self.caminho_pdf = caminho
             self.input_resultado.delete(0, "end")
             self.input_resultado.insert(0, Path(caminho).name)
-            self.verificar_arquivo()
 
     def verificar_arquivo(self):
         caminho = self.caminho_pdf or self.input_resultado.get()

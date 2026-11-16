@@ -8,6 +8,11 @@ import time
 import os
 import pdfplumber
 
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.ie.options import Options
+from selenium.webdriver.ie.service import Service
+
 class AppLancamento(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -56,6 +61,7 @@ class AppLancamento(ctk.CTk):
 
                     for linha in texto.split('\n'):
                         linha = linha.strip()
+                        # regex para pegar a data
                         match_data = re.search(r'(\d{2}[/\.-]\d{2}[/\.-]\d{4}|\d{4}[/\.-]\d{2}[/\.-]\d{2})', linha)
                         match_valor = re.search(r'([\d\.\,]+)$', linha)
 
@@ -196,7 +202,7 @@ class AppLancamento(ctk.CTk):
         self.titulo = ctk.CTkLabel(self.main_frame, text="Automação para Lançamentos SIGMA", font=("Arial", 24, "bold"), text_color="#000000")
         self.titulo.pack(anchor="w", padx=20, pady=(20, 0))
 
-        self.descricao = ctk.CTkLabel(self.main_frame, text="Realize lançamentos de forma automática e eficiente.", font=("Arial", 14), text_color="#495057")
+        self.descricao = ctk.CTkLabel(self.main_frame, text="Lançamentos de forma automática e eficiente.", font=("Arial", 14), text_color="#495057")
         self.descricao.pack(anchor="w", padx=20)
 
         # div arquivo

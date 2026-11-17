@@ -1,17 +1,75 @@
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
-from playwright.sync_api import sync_playwright
 import re
 import customtkinter as ctk
 import threading
-import time
 import os
 import pdfplumber
+from pywinauto import Application
 
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.ie.options import Options
-from selenium.webdriver.ie.service import Service
+from pdf_requisicoes import extrair_requisicoes
+
+
+CONTROLES_IGNORADOS_SIGMA = {"view_1017", "address-box"}
+CAMPOS_SIGMA = ("data_req", "req", "cre", "sici", "desig", "qtd")
+
+
+def conectar_sigma():
+    """Conecta à janela do Edge que está com o Sigma aberto."""
+    app = Application(backend="uia").connect(
+        title_re=".*Microsoft.*Edge.*",
+        found_index=0,
+    )
+    janela = app.top_window()
+    janela.set_focus()
+    return janela
+
+
+def obter_campos_editaveis_sigma(janela):
+    """Retorna os campos Edit visíveis e habilitados da tela do Sigma."""
+    campos = []
+    for campo in janela.descendants(control_type="Edit"):
+        auto_id = campo.element_info.automation_id or ""
+        nome = campo.element_info.name or ""
+
+        if auto_id in CONTROLES_IGNORADOS_SIGMA or nome == "Barra de pesquisa e enderecos":
+            continue
+        if campo.is_visible() and campo.is_enabled():
+            campos.append(campo)
+    return campos
+
+
+def valores_para_inserir_sigma(requisicoes):
+    """Retorna os valores do PDF sem incluir Unidade Escolar."""
+    for requisicao in requisicoes:
+        for campo in CAMPOS_SIGMA:
+            yield str(requisicao.get(campo, ""))
+
+
+def inserir_dados_sigma(requisicoes, janela):
+    """Preenche os inputs do Sigma com os campos de cada requisição.
+
+    Os inputs são usados na ordem em que a automação os encontra. O campo
+    ``unidade_escolar`` não é enviado e nenhum botão da tela é acionado.
+    """
+    valores = list(valores_para_inserir_sigma(requisicoes))
+    campos = obter_campos_editaveis_sigma(janela)
+
+    for campo, valor in zip(campos, valores):
+        campo.set_edit_text(valor)
+
+    return min(len(campos), len(valores))
+
+
+def inserir_pdf_no_sigma(caminho_pdf):
+    """Lê o PDF e preenche os inputs da janela Sigma aberta."""
+    caminho = Path(caminho_pdf)
+    if not caminho.is_file():
+        raise FileNotFoundError(f"PDF não encontrado: {caminho}")
+
+    requisicoes = extrair_requisicoes(caminho)
+    janela = conectar_sigma()
+    return inserir_dados_sigma(requisicoes, janela)
 
 class AppLancamento(ctk.CTk):
     def __init__(self):
@@ -50,52 +108,54 @@ class AppLancamento(ctk.CTk):
         self.lbl_info_arq.configure(text=f"Arquivo:  {nome_arq}")
 
         self.lancamentos = []
-        total_valor = 0.0
+        total_qtd = 0
 
         try:
             with pdfplumber.open(caminho) as pdf:
                 for pagina in pdf.pages:
-                    texto = pagina.extract_text()
-                    if not texto:
-                        continue
+                    for tabela in pagina.extract_tables():
+                        if not tabela:
+                            continue
 
-                    for linha in texto.split('\n'):
-                        linha = linha.strip()
-                        # regex para pegar a data
-                        match_data = re.search(r'(\d{2}[/\.-]\d{2}[/\.-]\d{4}|\d{4}[/\.-]\d{2}[/\.-]\d{2})', linha)
-                        match_valor = re.search(r'([\d\.\,]+)$', linha)
+                        cabecalho = [self._normalizar_celula(celula).upper() for celula in tabela[0]]
+                        esperado = ["DATA REQ", "REQ", "CRE", "SICI", "DESIG", "UNIDADE ESCOLAR", "QTD"]
+                        if cabecalho[:len(esperado)] != esperado:
+                            continue
 
-                        if match_data and match_valor:
-                            inicio_miolo = match_data.end()
-                            fim_miolo = match_valor.start()
-                            miolo = linha[inicio_miolo:fim_miolo].strip().split()
+                        for linha in tabela[1:]:
+                            if len(linha) < len(esperado):
+                                continue
 
-                            if len(miolo) >= 2 and miolo[0].startswith("EX-"):
-                                codigo = miolo[0]
-                                categoria = miolo[-1].lower()
-                                descricao = " ".join(miolo[1:-1]) if len(miolo) > 2 else miolo[0]
-                                valor_str = match_valor.group(1).replace(".", "").replace(",", ".")
-                                valor_num = float(valor_str)
+                            valores = [self._normalizar_celula(celula) for celula in linha[:len(esperado)]]
+                            if not valores[0] or not re.fullmatch(r"\d{2}/\d{2}/\d{4}", valores[0]):
+                                continue
 
-                                total_valor += valor_num
+                            try:
+                                qtd = int(valores[6])
+                            except ValueError:
+                                continue
 
-                                self.lancamentos.append({
-                                    "data": match_data.group(1),
-                                    "codigo": codigo,
-                                    "descricao": descricao,
-                                    "categoria": categoria,
-                                    "valor_str": match_valor.group(1),
-                                    "valor_num": valor_str
-                                })
+                            registro = {
+                                "data_req": valores[0],
+                                "req": valores[1],
+                                "cre": valores[2],
+                                "sici": valores[3],
+                                "desig": valores[4],
+                                "unidade_escolar": valores[5],
+                                "qtd": qtd,
+                            }
+                            self.lancamentos.append(registro)
+                            total_qtd += qtd
+
+            if not self.lancamentos:
+                raise ValueError("Os dados da tabela não foram encontrados no PDF.")
 
             qtd = len(self.lancamentos)
-            self.lbl_info_qtd.configure(text=f"Quantidade de linhas:  {qtd} lançamentos")
-
-            valor_fmt = f"{total_valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-            self.lbl_info_total.configure(text=f"Total do lote:  R${valor_fmt} (confere com o PDF)")
+            self.lbl_info_qtd.configure(text=f"Quantidade de linhas:  {qtd} requisições")
+            self.lbl_info_total.configure(text=f"Total solicitado:  {total_qtd}")
 
             self.btn_badge.configure(
-                text="Pronto",
+                text="Veriicado com sucesso",
                 fg_color='#D4EDDA',
                 text_color="#155724"
             )
@@ -106,8 +166,8 @@ class AppLancamento(ctk.CTk):
             for idx, item in enumerate(self.lancamentos, start=1):
                 idx_str = f"{idx:02d}"
                 self.tree.insert("", "end", iid=str(idx), values=(
-                    idx_str, item["data"], item["codigo"], item["descricao"], 
-                    item["categoria"], item["valor_str"], "Aguardando"
+                    idx_str, item["data_req"], item["req"], item["cre"], item["sici"],
+                    item["desig"], item["unidade_escolar"], item["qtd"], "Aguardando"
                 ))
 
             self.lbl_progresso.configure(text=f"Progresso: 0 / {qtd}")
@@ -116,6 +176,10 @@ class AppLancamento(ctk.CTk):
         except Exception as e:
             self.btn_badge.configure(text="Erro no arquivo", fg_color="#F8D7DA", text_color="#721C24")
             messagebox.showerror("Erro de Leitura", f"Falha ao ler PDF: {str(e)}")
+
+    @staticmethod
+    def _normalizar_celula(valor):
+        return re.sub(r"\s+", " ", str(valor or "")).strip()
 
     @staticmethod
     def formatar_para_iso(data_str):
@@ -128,49 +192,32 @@ class AppLancamento(ctk.CTk):
                 return f"{partes[2]}-{partes[1]}-{partes[0]}"
         return data_str
 
-    def executar_playwright(self):
+    def executar_sigma(self):
+        """Preenche a tela Sigma com os campos extraídos do PDF."""
         total = len(self.lancamentos)
 
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=False, slow_mo=200)
-            page = browser.new_page()
+        try:
+            janela = conectar_sigma()
+            campos = obter_campos_editaveis_sigma(janela)
+            valores = list(valores_para_inserir_sigma(self.lancamentos))
 
-            caminho_html = Path("index.html").resolve().as_uri()
-            page.goto(caminho_html)
-
-            for idx, item in enumerate(self.lancamentos, start=1):
-                if self.parar_solicitado:
-                    break
-
+            for idx in range(1, total + 1):
                 self.after(0, self._atualizar_linha_tabela, str(idx), "Lançando ...")
 
-                try:
-                    data_iso = self.formatar_para_iso(item["data"])
+            for campo, valor in zip(campos, valores):
+                campo.set_edit_text(valor)
 
-                    page.fill("#data", data_iso)
-                    page.fill("#codigo", item["codigo"])
-                    page.fill("#descricao", item["descricao"])
+            for idx in range(1, total + 1):
+                self.after(0, self._atualizar_linha_tabela, str(idx), "OK")
+                self.after(0, self._atualizar_progresso, idx, total, idx / total)
 
-                    try:
-                        page.select_option("#categoria", value=item["categoria"])
-                    except Exception:
-                        page.select_option("#categoria", index=1)
-
-                    page.fill("#valor", item["valor_num"])
-                    page.click("#btn-salvar")
-
-                    time.sleep(0.1)
-
-                    self.after(0, self._atualizar_linha_tabela, str(idx), "OK")
-                
-                except Exception as e:
-                    print(f"Erro ao lançar item {idx} ({item['codigo']}): {e}")
-                    self.after(0, self._atualizar_linha_tabela, str(idx), "ERRO")
-                
-                progresso_perc = idx / total
-                self.after(0, self._atualizar_progresso, idx, total, progresso_perc)
-
-            browser.close()
+        except Exception as erro:
+            print(f"Erro ao preencher o Sigma: {erro}")
+            self.after(0, self._atualizar_linha_tabela, "1", "ERRO")
+            messagebox.showerror("Erro ao lançar", str(erro))
+        finally:
+            self.em_execucao = False
+            self.after(0, self.btn_processar.configure, {"state": "normal"})
 
     def _iniciar_lancamentos_thread(self):
         if not self.lancamentos:
@@ -181,14 +228,14 @@ class AppLancamento(ctk.CTk):
             return
 
         self.em_execucao = True
-        self.parar_solicitado = False
+        self.parar_execucao = False
         self.btn_processar.configure(state="disabled")
 
-        threading.Thread(target=self.executar_playwright, daemon=True).start()
+        threading.Thread(target=self.executar_sigma, daemon=True).start()
 
     def _atualizar_linha_tabela(self, item_id, novo_status):
         valores = list(self.tree.item(item_id, "values"))
-        valores[6] = novo_status
+        valores[8] = novo_status
         self.tree.item(item_id, values=valores)
 
     def _atualizar_progresso(self, atual, total, percentual):
@@ -299,23 +346,27 @@ class AppLancamento(ctk.CTk):
         frame_tabela = ctk.CTkFrame(self.main_frame, fg_color="#FFFFFF", border_color="#DEE2E6", border_width=1, corner_radius=8)
         frame_tabela.pack(fill="both", expand=True, padx=15, pady=(0, 15))
 
-        colunas = ("id", "data", "codigo", "descricao", "categoria", "valor", "status")
+        colunas = ("id", "data_req", "req", "cre", "sici", "desig", "unidade_escolar", "qtd", "status")
         self.tree = ttk.Treeview(frame_tabela, columns=colunas, show="headings", height=10)
 
         self.tree.heading("id", text="#")
-        self.tree.heading("data", text="Data")
-        self.tree.heading("codigo", text="Código")
-        self.tree.heading("descricao", text="Descrição")
-        self.tree.heading("categoria", text="Categoria")
-        self.tree.heading("valor", text="R$")
+        self.tree.heading("data_req", text="Data Req")
+        self.tree.heading("req", text="Req")
+        self.tree.heading("cre", text="CRE")
+        self.tree.heading("sici", text="SICI")
+        self.tree.heading("desig", text="DESIG")
+        self.tree.heading("unidade_escolar", text="Unidade Escolar")
+        self.tree.heading("qtd", text="QTD")
         self.tree.heading("status", text="Status")
 
         self.tree.column("id", width=40, anchor="center")
-        self.tree.column("data", width=90, anchor="center")
-        self.tree.column("codigo", width=90, anchor="center")
-        self.tree.column("descricao", width=200, anchor="w")
-        self.tree.column("categoria", width=110, anchor="w")
-        self.tree.column("valor", width=100, anchor="e")
+        self.tree.column("data_req", width=90, anchor="center")
+        self.tree.column("req", width=55, anchor="center")
+        self.tree.column("cre", width=50, anchor="center")
+        self.tree.column("sici", width=70, anchor="center")
+        self.tree.column("desig", width=75, anchor="center")
+        self.tree.column("unidade_escolar", width=260, anchor="w")
+        self.tree.column("qtd", width=50, anchor="center")
         self.tree.column("status", width=110, anchor="center")
 
         scrollbar = ttk.Scrollbar(frame_tabela, orient="vertical", command=self.tree.yview)

@@ -9,13 +9,27 @@ from pywinauto import Application
 
 from pdf_requisicoes import extrair_requisicoes
 
-
 CONTROLES_IGNORADOS_SIGMA = {"view_1017", "address-box"}
+CAMPOS_POSICAO_SIGMA = {
+    "u.consumidora": 7,
+    "num.docto": 8,
+    "dt.docto.dia": 9,
+    "dt.docto.mes": 10,
+    "dt.docto.ano": 11,
+    "matricula": 12,
+    "codigo_material": 14,
+    "qtd.pedida": 18,
+    "qtd.atendida": 19,
+}
 CAMPOS_SIGMA = ("data_req", "req", "cre", "sici", "desig", "qtd")
+MAPEAMENTO_PDF_SIGMA = {
+    "u.consumidora": "sici",
+    "num.docto": "req",
+}
 
 
 def conectar_sigma():
-    """Conecta à janela do Edge que está com o Sigma aberto."""
+    """Conecta à janela do Edge que está com o Sigma abertooo."""
     app = Application(backend="uia").connect(
         title_re=".*Microsoft.*Edge.*",
         found_index=0,
@@ -39,26 +53,60 @@ def obter_campos_editaveis_sigma(janela):
     return campos
 
 
-def valores_para_inserir_sigma(requisicoes):
-    """Retorna os valores do PDF sem incluir Unidade Escolar."""
-    for requisicao in requisicoes:
-        for campo in CAMPOS_SIGMA:
-            yield str(requisicao.get(campo, ""))
+def inserir_lancamento_sigma(requisicao, campos, matricula="", codigo_material=""):
+    """Preenche os campos mapeados de um lancamento do PDF."""
+    data = str(requisicao.get("data_req", "")).strip()
+    partes_data = re.fullmatch(r"(\d{2})/(\d{2})/(\d{4})", data)
+    if not partes_data:
+        raise ValueError(f"Data de requisicao invalida: {data!r}")
+
+    partes_codigo = re.fullmatch(r"(\d{4})(\d{2})(\d{3})(\d{2})", str(codigo_material).strip())
+    if not partes_codigo:
+        raise ValueError(
+            f"Codigo do material invalido: {codigo_material!r}. "
+            "Informe exatamente 11 digitos."
+        )
+
+    maior_posicao = max(CAMPOS_POSICAO_SIGMA.values())
+    if len(campos) < maior_posicao:
+        raise RuntimeError(
+            f"A tela tem {len(campos)} inputs editaveis, "
+            f"mas o campo necessario esta na posicao {maior_posicao}."
+        )
+
+    for nome_campo, valor in zip(
+        ("dt.docto.dia", "dt.docto.mes", "dt.docto.ano"), partes_data.groups()
+    ):
+        campos[CAMPOS_POSICAO_SIGMA[nome_campo] - 1].set_edit_text(valor)
+
+    for nome_sigma, nome_pdf in MAPEAMENTO_PDF_SIGMA.items():
+        posicao = CAMPOS_POSICAO_SIGMA[nome_sigma]
+        campos[posicao - 1].set_edit_text(str(requisicao.get(nome_pdf, "")))
+
+    campos[CAMPOS_POSICAO_SIGMA["matricula"] - 1].set_edit_text(str(matricula))
+
+    for posicao, valor in zip(range(14, 18), partes_codigo.groups()):
+        campos[posicao - 1].set_edit_text(valor)
+
+    for nome_campo in ("qtd.pedida", "qtd.atendida"):
+        posicao = CAMPOS_POSICAO_SIGMA[nome_campo]
+        campos[posicao - 1].set_edit_text(str(requisicao.get("qtd", "")))
 
 
-def inserir_dados_sigma(requisicoes, janela):
-    """Preenche os inputs do Sigma com os campos de cada requisição.
+def inserir_dados_sigma(requisicoes, janela, ao_inserir=None):
+    """Preenche os campos mapeados para cada linha do PDF.
 
-    Os inputs são usados na ordem em que a automação os encontra. O campo
-    ``unidade_escolar`` não é enviado e nenhum botão da tela é acionado.
+    A matricula nao e sobrescrita porque nao existe valor correspondente no PDF.
+    Nenhum botao do Sigma e acionado.
     """
-    valores = list(valores_para_inserir_sigma(requisicoes))
     campos = obter_campos_editaveis_sigma(janela)
 
-    for campo, valor in zip(campos, valores):
-        campo.set_edit_text(valor)
+    for indice, requisicao in enumerate(requisicoes, start=1):
+        inserir_lancamento_sigma(requisicao, campos)
+        if ao_inserir:
+            ao_inserir(indice, len(requisicoes))
 
-    return min(len(campos), len(valores))
+    return len(requisicoes)
 
 
 def inserir_pdf_no_sigma(caminho_pdf):
@@ -193,43 +241,37 @@ class AppLancamento(ctk.CTk):
         return data_str
 
     def executar_sigma(self):
-        """Preenche a tela Sigma com os campos extraídos do PDF."""
-        total = len(self.lancamentos)
-
+        """Preenche os campos do Sigma com os dados de cada linha do PDF."""
         try:
+            if not self.lancamentos:
+                raise ValueError("Selecione e verifique um PDF valido primeiro.")
+
             janela = conectar_sigma()
             campos = obter_campos_editaveis_sigma(janela)
-            valores = list(valores_para_inserir_sigma(self.lancamentos))
+            matricula = self.input_matricula.get().strip()
+            codigo_material = self.input_codigo.get().strip()
 
-            for idx in range(1, total + 1):
-                self.after(0, self._atualizar_linha_tabela, str(idx), "Lançando ...")
+            lancamentos_teste = self.lancamentos[:1]
+            total = len(lancamentos_teste)
+            for indice, requisicao in enumerate(lancamentos_teste, start=1):
+                if self.parar_execucao:
+                    break
 
-            for campo, valor in zip(campos, valores):
-                campo.set_edit_text(valor)
-
-            for idx in range(1, total + 1):
-                self.after(0, self._atualizar_linha_tabela, str(idx), "OK")
-                self.after(0, self._atualizar_progresso, idx, total, idx / total)
+                self.after(0, self._atualizar_linha_tabela, str(indice), "Lançando...")
+                inserir_lancamento_sigma(requisicao, campos, matricula, codigo_material)
+                self.after(0, self._atualizar_linha_tabela, str(indice), "OK")
+                self.after(0, self._atualizar_progresso, indice, total, indice / total)
 
         except Exception as erro:
             print(f"Erro ao preencher o Sigma: {erro}")
-            self.after(0, self._atualizar_linha_tabela, "1", "ERRO")
             messagebox.showerror("Erro ao lançar", str(erro))
         finally:
             self.em_execucao = False
             self.after(0, self.btn_processar.configure, {"state": "normal"})
 
     def _iniciar_lancamentos_thread(self):
-        if not self.lancamentos:
-            messagebox.showwarning("Aviso", "Selecione e verifique um PDF válido primeiro.")
-            return
-
-        if self.em_execucao:
-            return
-
         self.em_execucao = True
         self.parar_execucao = False
-        self.btn_processar.configure(state="disabled")
 
         threading.Thread(target=self.executar_sigma, daemon=True).start()
 
@@ -267,6 +309,21 @@ class AppLancamento(ctk.CTk):
 
         self.botao_verificar = ctk.CTkButton(self.frame_arquivo, text="Verificar Arquivo", command=self.verificar_arquivo)
         self.botao_verificar.pack(side="left", padx=(0, 15), pady=10)
+
+        self.frame_codigo = ctk.CTkFrame(self.main_frame, fg_color="transparent", corner_radius=10)
+        self.frame_codigo.pack(fill="x", padx=20, pady=(0, 10))
+
+        self.label_codigo = ctk.CTkLabel(self.frame_codigo, text="Código do produto:", font=ctk.CTkFont(size=14, weight="bold"), text_color="#495057")
+        self.label_codigo.pack(side="left", padx=(15, 10), pady=10)
+
+        self.input_codigo = ctk.CTkEntry(self.frame_codigo, width=200, fg_color="#FFFFFF", text_color="#495059")
+        self.input_codigo.pack(side="left", fill="x", expand=True, padx=(0, 10), pady=10)
+
+        self.label_matricula = ctk.CTkLabel(self.frame_codigo, text="Matrícula:", font=ctk.CTkFont(size=14, weight="bold"), text_color="#495057")
+        self.label_matricula.pack(side="left", padx=(15, 10), pady=10)
+
+        self.input_matricula = ctk.CTkEntry(self.frame_codigo, width=200, fg_color="#FFFFFF", text_color="#495059")
+        self.input_matricula.pack(side="left", fill="x", expand=True, padx=(0, 10), pady=10)
 
         # Relatório do arquivo
         lbl_rel_title = ctk.CTkLabel(self.main_frame, text="Relatório do arquivo", font=ctk.CTkFont(size=14, weight="bold"), text_color="#000")

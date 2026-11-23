@@ -39,6 +39,22 @@ def conectar_sigma():
     return janela
 
 
+def clicar_inclusao_sigma(janela):
+    """Clica no terceiro botao visivel da tela, identificado como Inclusao."""
+    botoes = [
+        botao for botao in janela.descendants(control_type="Button")
+        if botao.is_visible() and botao.is_enabled()
+    ]
+
+    if len(botoes) < 3:
+        raise RuntimeError(
+            f"A tela tem {len(botoes)} botoes visiveis; o botao Inclusao "
+            "na posicao 3 nao esta disponivel."
+        )
+
+    botoes[2].click_input()
+
+
 def obter_campos_editaveis_sigma(janela):
     """Retorna os campos Edit visíveis e habilitados da tela do Sigma."""
     campos = []
@@ -121,7 +137,6 @@ def inserir_dados_sigma(requisicoes, janela, ao_inserir=None):
     """Preenche os campos mapeados para cada linha do PDF.
 
     A matricula nao e sobrescrita porque nao existe valor correspondente no PDF.
-    Nenhum botao do Sigma e acionado.
     """
     campos = obter_campos_editaveis_sigma(janela)
 
@@ -284,6 +299,7 @@ class AppLancamento(ctk.CTk):
                 self.after(0, self._atualizar_linha_tabela, str(indice), "Lançando...")
                 inserir_lancamento_sigma(requisicao, campos, matricula, codigo_material)
                 selecionar_checkbox_sigma(janela)
+                clicar_inclusao_sigma(janela)
                 self.after(0, self._atualizar_linha_tabela, str(indice), "OK")
                 self.after(0, self._atualizar_progresso, indice, total, indice / total)
 

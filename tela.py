@@ -93,6 +93,30 @@ def inserir_lancamento_sigma(requisicao, campos, matricula="", codigo_material="
         campos[posicao - 1].set_edit_text(str(requisicao.get("qtd", "")))
 
 
+def selecionar_checkbox_sigma(janela, posicoes=(8,)):
+    """Seleciona o oitavo checkbox da tela do Sigma."""
+    checkboxes = janela.descendants(control_type="CheckBox")
+
+    for posicao in posicoes:
+        if posicao > len(checkboxes):
+            raise RuntimeError(
+                f"A tela tem {len(checkboxes)} checkboxes, "
+                f"mas o checkbox necessario esta na posicao {posicao}."
+            )
+
+        checkbox = checkboxes[posicao - 1]
+        if not checkbox.is_visible() or not checkbox.is_enabled():
+            raise RuntimeError(f"O checkbox na posicao {posicao} nao esta disponivel.")
+
+        try:
+            selecionado = checkbox.get_toggle_state() == 1
+        except Exception:
+            selecionado = False
+
+        if not selecionado:
+            checkbox.toggle()
+
+
 def inserir_dados_sigma(requisicoes, janela, ao_inserir=None):
     """Preenche os campos mapeados para cada linha do PDF.
 
@@ -259,6 +283,7 @@ class AppLancamento(ctk.CTk):
 
                 self.after(0, self._atualizar_linha_tabela, str(indice), "Lançando...")
                 inserir_lancamento_sigma(requisicao, campos, matricula, codigo_material)
+                selecionar_checkbox_sigma(janela)
                 self.after(0, self._atualizar_linha_tabela, str(indice), "OK")
                 self.after(0, self._atualizar_progresso, indice, total, indice / total)
 

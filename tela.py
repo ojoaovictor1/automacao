@@ -1,6 +1,8 @@
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 import re
+import time
+import traceback
 import customtkinter as ctk
 import threading
 import os
@@ -40,19 +42,149 @@ def conectar_sigma():
 
 
 def clicar_inclusao_sigma(janela):
-    """Clica no terceiro botao visivel da tela, identificado como Inclusao."""
+    """Aciona o botao Inclusao da tela atual do Sigma."""
     botoes = [
         botao for botao in janela.descendants(control_type="Button")
         if botao.is_visible() and botao.is_enabled()
     ]
 
-    if len(botoes) < 3:
-        raise RuntimeError(
-            f"A tela tem {len(botoes)} botoes visiveis; o botao Inclusao "
-            "na posicao 3 nao esta disponivel."
+    for indice, botao in enumerate(botoes, start=1):
+        nome = (botao.element_info.name or "").strip()
+        if nome.casefold().startswith("inclus"):
+            try:
+                botao.invoke()
+            except Exception:
+                botao.click_input()
+            print(f"Botao Inclusao acionado: [{indice}] {nome!r}")
+            return
+
+    nomes = [botao.element_info.name or "<sem texto>" for botao in botoes]
+    raise RuntimeError(
+        "Botao Inclusao nao encontrado entre os botoes visiveis e habilitados. "
+        f"Botoes encontrados: {nomes!r}"
+    )
+
+
+def mapear_botoes_sigma(janela):
+    """Confirma a inclusao e lista botoes e checkboxes da tela seguinte."""
+    time.sleep(1)
+    botoes = [
+        botao for botao in janela.descendants(control_type="Button")
+        if botao.is_visible()
+    ]
+
+    print(f"\n=== BOTOES ANTES DA CONFIRMACAO ({len(botoes)}) ===")
+    for indice, botao in enumerate(botoes, start=1):
+        print(
+            f"[{indice}] texto={botao.element_info.name or ''!r} "
+            f"| auto_id={botao.element_info.automation_id or ''!r} "
+            f"| habilitado={botao.is_enabled()}"
         )
 
-    botoes[2].click_input()
+    confirmacao = next(
+        (
+            botao for botao in botoes
+            if (botao.element_info.name or "").strip().casefold() == "sim"
+        ),
+        None,
+    )
+    if confirmacao is None:
+        raise RuntimeError(
+            "Botao de confirmacao 'sim' nao encontrado. "
+            f"Botoes encontrados: "
+            f"{[botao.element_info.name or '<sem texto>' for botao in botoes]!r}"
+        )
+    if not confirmacao.is_enabled():
+        raise RuntimeError("O botao de confirmacao 'sim' esta desabilitado.")
+
+    try:
+        confirmacao.invoke()
+    except Exception:
+        confirmacao.click_input()
+    print("Confirmacao acionada: 'sim'")
+
+    time.sleep(1)
+    botoes_seguinte = [
+        botao for botao in janela.descendants(control_type="Button")
+        if botao.is_visible()
+    ]
+    checkboxes_seguinte = [
+        checkbox for checkbox in janela.descendants(control_type="CheckBox")
+        if checkbox.is_visible()
+    ]
+
+    print(f"\n=== BOTOES DA TELA SEGUINTE ({len(botoes_seguinte)}) ===")
+    for indice, botao in enumerate(botoes_seguinte, start=1):
+        print(
+            f"[{indice}] texto={botao.element_info.name or ''!r} "
+            f"| auto_id={botao.element_info.automation_id or ''!r} "
+            f"| habilitado={botao.is_enabled()}"
+        )
+
+    print(f"\n=== CHECKBOXES DA TELA SEGUINTE ({len(checkboxes_seguinte)}) ===")
+    for indice, checkbox in enumerate(checkboxes_seguinte, start=1):
+        print(
+            f"[{indice}] texto={checkbox.element_info.name or ''!r} "
+            f"| auto_id={checkbox.element_info.automation_id or ''!r} "
+            f"| habilitado={checkbox.is_enabled()}"
+        )
+
+    checkboxes_habilitados = [
+        checkbox for checkbox in checkboxes_seguinte
+        if checkbox.is_enabled()
+    ]
+    if not checkboxes_habilitados:
+        raise RuntimeError("Nenhum checkbox habilitado foi encontrado na tela seguinte.")
+
+    checkbox_sim = checkboxes_habilitados[-1]
+
+    try:
+        selecionado = checkbox_sim.get_toggle_state() == 1
+    except Exception as erro:
+        raise RuntimeError(
+            "Nao foi possivel verificar o estado do checkbox de fechamento."
+        ) from erro
+
+    if not selecionado:
+        checkbox_sim.click_input()
+        time.sleep(0.5)
+        try:
+            selecionado = checkbox_sim.get_toggle_state() == 1
+        except Exception as erro:
+            raise RuntimeError(
+                "O checkbox foi clicado, mas nao foi possivel confirmar o estado."
+            ) from erro
+
+    if not selecionado:
+        raise RuntimeError(
+            "O checkbox de fechamento continua desmarcado; o Enter nao sera acionado."
+        )
+
+    print(
+        "Checkbox selecionado: [1] "
+        f"{checkbox_sim.element_info.name or '<sem texto>'!r}"
+    )
+
+    time.sleep(1)
+    botoes_atuais = [
+        botao for botao in janela.descendants(control_type="Button")
+        if botao.is_visible() and botao.is_enabled()
+    ]
+    botao_enter = next(
+        (
+            botao for botao in botoes_atuais
+            if (botao.element_info.name or "").strip().casefold() == "enter"
+        ),
+        None,
+    )
+    if botao_enter is None:
+        raise RuntimeError("Botao 'Enter' nao encontrado ou esta desabilitado.")
+
+    try:
+        botao_enter.invoke()
+    except Exception:
+        botao_enter.click_input()
+    print("Botao 'Enter' acionado.")
 
 
 def obter_campos_editaveis_sigma(janela):
@@ -67,6 +199,51 @@ def obter_campos_editaveis_sigma(janela):
         if campo.is_visible() and campo.is_enabled():
             campos.append(campo)
     return campos
+
+
+def aguardar_campos_editaveis_sigma(janela, timeout=15):
+    """Aguarda a tela de lancamento disponibilizar todos os campos necessarios."""
+    quantidade_necessaria = max(CAMPOS_POSICAO_SIGMA.values())
+    limite = time.monotonic() + timeout
+    campos = []
+
+    while time.monotonic() < limite:
+        campos = obter_campos_editaveis_sigma(janela)
+        if len(campos) >= quantidade_necessaria:
+            return campos
+        time.sleep(0.25)
+
+    controles_edit = [
+        controle for controle in janela.descendants(control_type="Edit")
+        if (controle.element_info.automation_id or "") not in CONTROLES_IGNORADOS_SIGMA
+        and (controle.element_info.name or "") != "Barra de pesquisa e enderecos"
+    ]
+    detalhes_edits = [
+        {
+            "nome": controle.element_info.name or "",
+            "auto_id": controle.element_info.automation_id or "",
+            "visivel": controle.is_visible(),
+            "habilitado": controle.is_enabled(),
+        }
+        for controle in controles_edit
+    ]
+    botoes_visiveis = [
+        {
+            "nome": botao.element_info.name or "",
+            "auto_id": botao.element_info.automation_id or "",
+            "habilitado": botao.is_enabled(),
+        }
+        for botao in janela.descendants(control_type="Button")
+        if botao.is_visible()
+    ]
+    print(f"Campos Edit encontrados na tela inesperada: {detalhes_edits!r}")
+    print(f"Botoes encontrados na tela inesperada: {botoes_visiveis!r}")
+
+    raise RuntimeError(
+        f"A tela nao ficou pronta: encontrados {len(campos)} campos editaveis "
+        f"habilitados; eram necessarios {quantidade_necessaria}. "
+        f"Consulte no terminal os nomes e IDs dos campos e botoes atuais."
+    )
 
 
 def inserir_lancamento_sigma(requisicao, campos, matricula="", codigo_material=""):
@@ -239,10 +416,10 @@ class AppLancamento(ctk.CTk):
 
             qtd = len(self.lancamentos)
             self.lbl_info_qtd.configure(text=f"Quantidade de linhas:  {qtd} requisições")
-            self.lbl_info_total.configure(text=f"Total solicitado:  {total_qtd}")
+            self.lbl_info_total.configure(text=f"Quantidade total solicitada:  {total_qtd}")
 
             self.btn_badge.configure(
-                text="Veriicado com sucesso",
+                text="Verificado com sucesso",
                 fg_color='#D4EDDA',
                 text_color="#155724"
             )
@@ -281,31 +458,48 @@ class AppLancamento(ctk.CTk):
 
     def executar_sigma(self):
         """Preenche os campos do Sigma com os dados de cada linha do PDF."""
+        etapa = "validar lançamentos"
+        indice = 0
         try:
             if not self.lancamentos:
                 raise ValueError("Selecione e verifique um PDF valido primeiro.")
 
+            etapa = "conectar ao Sigma"
             janela = conectar_sigma()
-            campos = obter_campos_editaveis_sigma(janela)
             matricula = self.input_matricula.get().strip()
             codigo_material = self.input_codigo.get().strip()
 
-            lancamentos_teste = self.lancamentos[:1]
-            total = len(lancamentos_teste)
-            for indice, requisicao in enumerate(lancamentos_teste, start=1):
+            total = len(self.lancamentos)
+            for indice, requisicao in enumerate(self.lancamentos, start=1):
                 if self.parar_execucao:
                     break
 
+                etapa = "aguardar campos editáveis"
+                campos = aguardar_campos_editaveis_sigma(janela)
+                etapa = "preencher dados"
                 self.after(0, self._atualizar_linha_tabela, str(indice), "Lançando...")
                 inserir_lancamento_sigma(requisicao, campos, matricula, codigo_material)
+                etapa = "selecionar checkbox do lançamento"
                 selecionar_checkbox_sigma(janela)
+                etapa = "clicar em Inclusão"
                 clicar_inclusao_sigma(janela)
+                etapa = "confirmar e concluir lançamento"
+                mapear_botoes_sigma(janela)
                 self.after(0, self._atualizar_linha_tabela, str(indice), "OK")
                 self.after(0, self._atualizar_progresso, indice, total, indice / total)
 
         except Exception as erro:
-            print(f"Erro ao preencher o Sigma: {erro}")
-            messagebox.showerror("Erro ao lançar", str(erro))
+            detalhe = repr(erro)
+            print(
+                f"Erro no lançamento {indice or '-'} durante a etapa '{etapa}': {detalhe}"
+            )
+            traceback.print_exc()
+            mensagem = (
+                f"Lançamento: {indice or '-'}\n"
+                f"Etapa: {etapa}\n"
+                f"Erro: {detalhe}"
+            )
+            self.after(0, messagebox.showerror, "Erro ao lançar", mensagem)
         finally:
             self.em_execucao = False
             self.after(0, self.btn_processar.configure, {"state": "normal"})
